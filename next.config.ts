@@ -10,18 +10,6 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
-  async rewrites() {
-    return [
-      {
-        source: "/backend",
-        destination: "http://localhost:3001/",
-      },
-      {
-        source: "/backend/:path*",
-        destination: "http://localhost:3001/:path*",
-      },
-    ];
-  },
 };
 
 export default nextConfig;

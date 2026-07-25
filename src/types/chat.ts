@@ -21,13 +21,36 @@ export type PendingTool = {
   toolUseId: string;
 };
 
+export type ApprovalField = {
+  label: string;
+  value: string;
+};
+
+export type ApprovalView = {
+  kind: "review";
+  title: string;
+  summary: string;
+  body: string;
+  fields: ApprovalField[];
+  actions: Array<"approve" | "reject" | "modify">;
+  hint: string;
+};
+
+export type SessionChatTurn = {
+  role: "user" | "assistant";
+  content: string;
+  at: string;
+};
+
 export type AgentChatResult = {
   sessionId: string;
   goal: string;
   status: AgentStatus;
   answer: string;
+  approval: ApprovalView | null;
   pendingTool: PendingTool | null;
   toolHistory: unknown[];
+  chatHistory?: SessionChatTurn[];
 };
 
 export type AgentApiMessage = {
@@ -41,5 +64,6 @@ export type AgentContentBlock =
 
 export type SessionMessagesResponse = {
   sessionId: string;
-  messages: AgentApiMessage[];
+  messages?: AgentApiMessage[];
+  chatHistory?: SessionChatTurn[];
 };

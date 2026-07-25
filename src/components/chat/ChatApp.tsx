@@ -3,17 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentStatus,
+  ApprovalView,
   ChatHistoryItem,
   ChatMessage,
-  PendingTool,
 } from "@/types/chat";
 import {
   clearStoredSessionId,
-  fetchSessionMessages,
+  fetchSession,
   getStoredSessionId,
+  messagesFromChatPayload,
   sendChatMessage,
   storeSessionId,
-  toChatMessages,
 } from "@/lib/agentApi";
 import {
   getChatHistory,
@@ -21,8 +21,10 @@ import {
   removeChatHistory,
   upsertChatHistory,
 } from "@/lib/chatHistory";
+import { ApprovalCard } from "./ApprovalCard";
 import { ChatInput } from "./ChatInput";
 import { ChatSidebar } from "./ChatSidebar";
+import { FeedKnowledgeModal } from "./FeedKnowledgeModal";
 import { MessageBubble } from "./MessageBubble";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 
@@ -35,11 +37,12 @@ export function ChatApp() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [history, setHistory] = useState<ChatHistoryItem[]>([]);
   const [status, setStatus] = useState<AgentStatus | null>(null);
-  const [pendingTool, setPendingTool] = useState<PendingTool | null>(null);
+  const [approval, setApproval] = useState<ApprovalView | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [feedOpen, setFeedOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
 
@@ -53,7 +56,7 @@ export function ChatApp() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isSending, pendingTool]);
+  }, [messages, isSending, approval]);
 
   const rememberChat = useCallback((id: string, titleSource: string) => {
     const next = upsertChatHistory({
@@ -62,15 +65,6 @@ export function ChatApp() {
       updatedAt: Date.now(),
     });
     setHistory(next);
-  }, []);
-
-  const syncMessages = useCallback(async (id: string) => {
-    const apiMessages = await fetchSessionMessages(id);
-    const mapped = toChatMessages(apiMessages);
-    if (mapped.length > 0) {
-      setMessages(mapped);
-    }
-    return mapped;
   }, []);
 
   useEffect(() => {
@@ -84,18 +78,27 @@ export function ChatApp() {
       }
 
       try {
-        const mapped = await syncMessages(storedId);
-        if (!cancelled) {
-          setSessionId(storedId);
-          if (mapped[0]?.content) {
-            rememberChat(storedId, mapped[0].content);
-          }
+        const session = await fetchSession(storedId);
+        if (cancelled) return;
+
+        setSessionId(storedId);
+        setStatus(session.status);
+        setApproval(session.approval);
+        const mapped = messagesFromChatPayload(session);
+        setMessages(mapped);
+
+        if (mapped[0]?.content) {
+          rememberChat(storedId, mapped[0].content);
+        } else if (session.goal) {
+          rememberChat(storedId, session.goal);
         }
       } catch {
         clearStoredSessionId();
         if (!cancelled) {
           setSessionId(null);
           setMessages([]);
+          setStatus(null);
+          setApproval(null);
         }
       } finally {
         if (!cancelled) setIsLoadingSession(false);
@@ -106,7 +109,7 @@ export function ChatApp() {
     return () => {
       cancelled = true;
     };
-  }, [rememberChat, syncMessages]);
+  }, [rememberChat]);
 
   function startNewChat() {
     clearStoredSessionId();
@@ -114,7 +117,7 @@ export function ChatApp() {
     setSessionId(null);
     setMessages([]);
     setStatus(null);
-    setPendingTool(null);
+    setApproval(null);
     setError(null);
     setIsSending(false);
   }
@@ -125,19 +128,23 @@ export function ChatApp() {
     setError(null);
     setIsLoadingSession(true);
     setStatus(null);
-    setPendingTool(null);
+    setApproval(null);
 
     try {
-      const mapped = await syncMessages(id);
+      const session = await fetchSession(id);
       storeSessionId(id);
       sessionIdRef.current = id;
       setSessionId(id);
+      setStatus(session.status);
+      setApproval(session.approval);
 
-      if (mapped.length === 0) {
-        setMessages([]);
+      const mapped = messagesFromChatPayload(session);
+      setMessages(mapped);
+
+      if (mapped.length === 0 && !session.approval) {
         setError("This chat has no messages yet, or the session expired.");
       } else {
-        rememberChat(id, mapped[0]?.content ?? "Previous chat");
+        rememberChat(id, mapped[0]?.content ?? session.goal ?? "Previous chat");
       }
     } catch (err) {
       setError(
@@ -178,37 +185,29 @@ export function ChatApp() {
       sessionIdRef.current = result.sessionId;
       setSessionId(result.sessionId);
       setStatus(result.status);
-      setPendingTool(result.pendingTool);
+      setApproval(result.approval ?? null);
       rememberChat(result.sessionId, result.goal || content);
 
-      try {
-        const apiMessages = await fetchSessionMessages(result.sessionId);
-        const mapped = toChatMessages(apiMessages);
-
-        if (mapped.length > 0) {
-          setMessages(mapped);
-        } else if (result.answer?.trim()) {
-          setMessages((current) => [
-            ...current,
-            {
-              id: createId(),
-              role: "agent",
-              content: result.answer,
-              createdAt: Date.now(),
-            },
-          ]);
-        }
-      } catch {
-        if (result.answer?.trim()) {
-          setMessages((current) => [
-            ...current,
-            {
-              id: createId(),
-              role: "agent",
-              content: result.answer,
-              createdAt: Date.now(),
-            },
-          ]);
+      if (result.chatHistory?.length) {
+        setMessages(messagesFromChatPayload(result));
+      } else {
+        try {
+          const session = await fetchSession(result.sessionId);
+          setApproval(session.approval);
+          setStatus(session.status);
+          setMessages(messagesFromChatPayload(session));
+        } catch {
+          if (result.answer?.trim()) {
+            setMessages((current) => [
+              ...current,
+              {
+                id: createId(),
+                role: "agent",
+                content: result.answer,
+                createdAt: Date.now(),
+              },
+            ]);
+          }
         }
       }
     } catch (err) {
@@ -221,7 +220,8 @@ export function ChatApp() {
     }
   }
 
-  const waitingForApproval = status === "waiting_for_approval";
+  const waitingForApproval =
+    status === "waiting_for_approval" && approval !== null;
 
   return (
     <div className="flex h-dvh w-full overflow-hidden">
@@ -249,6 +249,13 @@ export function ChatApp() {
             <p className="text-[0.65rem] font-semibold tracking-[0.18em] text-accent uppercase">
               Always on
             </p>
+            <button
+              type="button"
+              onClick={() => setFeedOpen(true)}
+              className="absolute right-0 top-3 rounded-xl bg-surface px-3 py-1.5 text-xs font-medium text-foreground ring-1 ring-border transition-colors hover:bg-accent-soft"
+            >
+              Feed
+            </button>
           </div>
           <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
             Personal Agent
@@ -263,7 +270,7 @@ export function ChatApp() {
             <div className="flex h-full min-h-64 items-center justify-center text-sm text-muted">
               Restoring conversation…
             </div>
-          ) : messages.length === 0 && !isSending ? (
+          ) : messages.length === 0 && !isSending && !waitingForApproval ? (
             <div className="flex h-full min-h-64 flex-col items-center justify-center px-4 text-center">
               <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
                 <svg
@@ -295,17 +302,13 @@ export function ChatApp() {
 
               {isSending ? <ThinkingIndicator /> : null}
 
-              {waitingForApproval && pendingTool ? (
-                <div className="rounded-2xl bg-accent-soft px-4 py-3 text-sm text-foreground ring-1 ring-border">
-                  <p className="font-medium">Approval needed</p>
-                  <p className="mt-1 text-muted">
-                    The agent wants to run{" "}
-                    <span className="font-medium text-foreground">
-                      {pendingTool.name}
-                    </span>
-                    . Reply with <strong>yes</strong> or <strong>no</strong>.
-                  </p>
-                </div>
+              {waitingForApproval && approval ? (
+                <ApprovalCard
+                  approval={approval}
+                  disabled={isSending}
+                  onApprove={() => void handleSend("yes")}
+                  onReject={() => void handleSend("no")}
+                />
               ) : null}
 
               <div ref={bottomRef} />
@@ -326,6 +329,7 @@ export function ChatApp() {
           />
         </div>
       </div>
+      <FeedKnowledgeModal open={feedOpen} onClose={() => setFeedOpen(false)} />
     </div>
   );
 }

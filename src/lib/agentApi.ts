@@ -1,12 +1,28 @@
 import type {
   AgentApiMessage,
   AgentChatResult,
+  AgentStatus,
+  ApprovalView,
   ChatMessage,
+  PendingTool,
+  SessionChatTurn,
   SessionMessagesResponse,
 } from "@/types/chat";
 
-const API_BASE = process.env.NEXT_PUBLIC_AGENT_API_BASE ?? "/backend";
+const API_BASE = process.env.NEXT_PUBLIC_AGENT_API_BASE ?? "http://localhost:3001";
 const SESSION_KEY = "personal-agent-session-id";
+
+export type AgentSession = {
+  sessionId: string;
+  goal: string;
+  status: AgentStatus;
+  answer?: string;
+  approval: ApprovalView | null;
+  pendingTool: PendingTool | null;
+  toolHistory: unknown[];
+  chatHistory: SessionChatTurn[];
+  messages?: AgentApiMessage[];
+};
 
 export function getStoredSessionId(): string | null {
   if (typeof window === "undefined") return null;
@@ -39,7 +55,7 @@ export async function sendChatMessage(
   const body: { query: string; sessionId?: string } = { query };
   if (sessionId) body.sessionId = sessionId;
 
-  const response = await fetch(API_BASE, {
+  const response = await fetch(`${API_BASE}/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -52,36 +68,41 @@ export async function sendChatMessage(
   return (await response.json()) as AgentChatResult;
 }
 
-/** GET /sessions/:id/messages — preferred */
-export async function fetchSessionMessages(
+/** GET /sessions/:id — full session including chatHistory + approval */
+export async function fetchSession(sessionId: string): Promise<AgentSession> {
+  const response = await fetch(
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "GET" },
+  );
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+
+  const data = (await response.json()) as AgentSession;
+  return {
+    ...data,
+    chatHistory: data.chatHistory ?? [],
+    approval: data.approval ?? null,
+  };
+}
+
+/** Prefer chatHistory; fall back to Anthropic messages if needed */
+export async function fetchSessionChat(
   sessionId: string,
-): Promise<AgentApiMessage[]> {
+): Promise<SessionChatTurn[]> {
   const messagesUrl = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages`;
   const messagesResponse = await fetch(messagesUrl, { method: "GET" });
 
   if (messagesResponse.ok) {
     const data = (await messagesResponse.json()) as SessionMessagesResponse;
-    return data.messages ?? [];
+    if (data.chatHistory?.length) return data.chatHistory;
   }
 
-  // Fallback: full session payload (includes messages in current backend)
-  if (messagesResponse.status === 404) {
-    const sessionResponse = await fetch(
-      `${API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
-      { method: "GET" },
-    );
+  const session = await fetchSession(sessionId);
+  if (session.chatHistory?.length) return session.chatHistory;
 
-    if (!sessionResponse.ok) {
-      throw new Error(await readError(sessionResponse));
-    }
-
-    const session = (await sessionResponse.json()) as {
-      messages?: AgentApiMessage[];
-    };
-    return session.messages ?? [];
-  }
-
-  throw new Error(await readError(messagesResponse));
+  return toChatTurnsFromMessages(session.messages ?? []);
 }
 
 function extractText(content: AgentApiMessage["content"]): string {
@@ -97,21 +118,68 @@ function extractText(content: AgentApiMessage["content"]): string {
     .trim();
 }
 
-/** Map Anthropic-style session messages into UI bubbles */
-export function toChatMessages(apiMessages: AgentApiMessage[]): ChatMessage[] {
-  const mapped: ChatMessage[] = [];
+function toChatTurnsFromMessages(
+  apiMessages: AgentApiMessage[],
+): SessionChatTurn[] {
+  const turns: SessionChatTurn[] = [];
 
-  apiMessages.forEach((message, index) => {
+  apiMessages.forEach((message) => {
     const text = extractText(message.content);
     if (!text) return;
-
-    mapped.push({
-      id: `${message.role}-${index}-${text.slice(0, 24)}`,
-      role: message.role === "user" ? "user" : "agent",
+    turns.push({
+      role: message.role,
       content: text,
-      createdAt: Date.now() + index,
+      at: new Date().toISOString(),
     });
   });
 
-  return mapped;
+  return turns;
+}
+
+/** Map backend chatHistory into UI bubbles */
+export function toChatMessagesFromHistory(
+  chatHistory: SessionChatTurn[],
+): ChatMessage[] {
+  return chatHistory
+    .filter((turn) => turn.content?.trim())
+    .map((turn, index) => ({
+      id: `${turn.role}-${turn.at ?? index}-${turn.content.slice(0, 24)}`,
+      role: turn.role === "user" ? "user" : "agent",
+      content: turn.content.trim(),
+      createdAt: turn.at ? Date.parse(turn.at) || Date.now() + index : Date.now() + index,
+    }));
+}
+
+/**
+ * Build UI messages from session/result.
+ * When an approval card is shown, drop the trailing duplicate approval text.
+ */
+export function messagesFromChatPayload(payload: {
+  chatHistory?: SessionChatTurn[];
+  messages?: AgentApiMessage[];
+  status?: AgentStatus;
+  answer?: string;
+  approval?: ApprovalView | null;
+}): ChatMessage[] {
+  const turns =
+    payload.chatHistory && payload.chatHistory.length > 0
+      ? [...payload.chatHistory]
+      : toChatTurnsFromMessages(payload.messages ?? []);
+
+  if (
+    payload.status === "waiting_for_approval" &&
+    payload.approval &&
+    payload.answer?.trim()
+  ) {
+    const answer = payload.answer.trim();
+    while (
+      turns.length > 0 &&
+      turns[turns.length - 1]?.role === "assistant" &&
+      turns[turns.length - 1]?.content.trim() === answer
+    ) {
+      turns.pop();
+    }
+  }
+
+  return toChatMessagesFromHistory(turns);
 }
