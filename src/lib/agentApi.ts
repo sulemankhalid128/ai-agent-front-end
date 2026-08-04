@@ -65,24 +65,57 @@ export async function sendChatMessage(
   return (await response.json()) as AgentChatResult;
 }
 
-/** GET /sessions/:id — full session including chatHistory + approval */
+function normalizeSession(data: AgentSession): AgentSession {
+  return {
+    ...data,
+    sessionId: data.sessionId,
+    chatHistory: data.chatHistory ?? [],
+    approval: data.approval ?? null,
+    pendingTool: data.pendingTool ?? null,
+    toolHistory: data.toolHistory ?? [],
+  };
+}
+
+/**
+ * GET /chats/:id — preferred: one chat + messages/history.
+ * Falls back to GET /sessions/:id for older backends.
+ */
 export async function fetchSession(sessionId: string): Promise<AgentSession> {
-  const response = await fetch(
+  const chatUrl = `${API_BASE}/chats/${encodeURIComponent(sessionId)}`;
+  const chatResponse = await fetch(chatUrl, {
+    method: "GET",
+    headers: authHeaders(false),
+  });
+
+  if (chatResponse.ok) {
+    const data = (await chatResponse.json()) as AgentSession & {
+      id?: string;
+    };
+    return normalizeSession({
+      ...data,
+      sessionId: data.sessionId ?? data.id ?? sessionId,
+    });
+  }
+
+  if (chatResponse.status === 401) {
+    await ensureOk(chatResponse);
+  }
+
+  const sessionResponse = await fetch(
     `${API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
     { method: "GET", headers: authHeaders(false) },
   );
 
-  await ensureOk(response);
+  await ensureOk(sessionResponse);
 
-  const data = (await response.json()) as AgentSession;
-  return {
+  const data = (await sessionResponse.json()) as AgentSession;
+  return normalizeSession({
     ...data,
-    chatHistory: data.chatHistory ?? [],
-    approval: data.approval ?? null,
-  };
+    sessionId: data.sessionId ?? sessionId,
+  });
 }
 
-/** Prefer chatHistory; fall back to Anthropic messages if needed */
+/** GET /sessions/:id/messages — messages only; fall back to full chat */
 export async function fetchSessionChat(
   sessionId: string,
 ): Promise<SessionChatTurn[]> {
@@ -95,6 +128,7 @@ export async function fetchSessionChat(
   if (messagesResponse.ok) {
     const data = (await messagesResponse.json()) as SessionMessagesResponse;
     if (data.chatHistory?.length) return data.chatHistory;
+    if (data.messages?.length) return toChatTurnsFromMessages(data.messages);
   }
 
   const session = await fetchSession(sessionId);

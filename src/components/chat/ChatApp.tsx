@@ -16,10 +16,11 @@ import {
   storeSessionId,
 } from "@/lib/agentApi";
 import {
-  getChatHistory,
+  deleteChatOnServer,
+  fetchChatList,
   makeChatTitle,
-  removeChatHistory,
-  upsertChatHistory,
+  removeChatFromList,
+  upsertChatInList,
 } from "@/lib/chatHistory";
 import { ApprovalCard } from "./ApprovalCard";
 import { ChatInput } from "./ChatInput";
@@ -47,6 +48,7 @@ export function ChatApp({ user, onLogout }: ChatAppProps) {
   const [approval, setApproval] = useState<ApprovalView | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [feedOpen, setFeedOpen] = useState(false);
@@ -58,65 +60,95 @@ export function ChatApp({ user, onLogout }: ChatAppProps) {
   }, [sessionId]);
 
   useEffect(() => {
-    setHistory(getChatHistory());
-  }, []);
-
-  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isSending, approval]);
 
   const rememberChat = useCallback((id: string, titleSource: string) => {
-    const next = upsertChatHistory({
-      sessionId: id,
-      title: makeChatTitle(titleSource),
-      updatedAt: Date.now(),
-    });
-    setHistory(next);
+    setHistory((current) =>
+      upsertChatInList(current, {
+        sessionId: id,
+        title: makeChatTitle(titleSource),
+        updatedAt: Date.now(),
+      }),
+    );
+  }, []);
+
+  const refreshHistory = useCallback(async () => {
+    const items = await fetchChatList();
+    setHistory(items);
+    return items;
   }, []);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function restoreSession() {
-      const storedId = getStoredSessionId();
-      if (!storedId) {
-        setIsLoadingSession(false);
-        return;
-      }
+    async function bootstrap() {
+      setIsLoadingHistory(true);
+      setIsLoadingSession(true);
+      setError(null);
 
       try {
-        const session = await fetchSession(storedId);
+        const items = await fetchChatList();
         if (cancelled) return;
+        setHistory(items);
 
-        setSessionId(storedId);
-        setStatus(session.status);
-        setApproval(session.approval);
-        const mapped = messagesFromChatPayload(session);
-        setMessages(mapped);
+        const storedId = getStoredSessionId();
+        const restoreId =
+          storedId && items.some((item) => item.sessionId === storedId)
+            ? storedId
+            : null;
 
-        if (mapped[0]?.content) {
-          rememberChat(storedId, mapped[0].content);
-        } else if (session.goal) {
-          rememberChat(storedId, session.goal);
+        if (!restoreId) {
+          clearStoredSessionId();
+          return;
         }
-      } catch {
-        clearStoredSessionId();
-        if (!cancelled) {
-          setSessionId(null);
-          setMessages([]);
-          setStatus(null);
-          setApproval(null);
+
+        try {
+          const session = await fetchSession(restoreId);
+          if (cancelled) return;
+
+          setSessionId(restoreId);
+          sessionIdRef.current = restoreId;
+          setStatus(session.status);
+          setApproval(session.approval);
+          setMessages(messagesFromChatPayload(session));
+        } catch {
+          clearStoredSessionId();
+          if (!cancelled) {
+            setSessionId(null);
+            setMessages([]);
+            setStatus(null);
+            setApproval(null);
+          }
         }
+      } catch (err) {
+        if (cancelled) return;
+        const message =
+          err instanceof Error ? err.message : "Could not load your chats";
+        if (
+          message.toLowerCase().includes("authorization") ||
+          message.toLowerCase().includes("token") ||
+          message.toLowerCase().includes("unauthorized")
+        ) {
+          clearAuthSession();
+          clearStoredSessionId();
+          onLogout();
+          return;
+        }
+        setError(message);
       } finally {
-        if (!cancelled) setIsLoadingSession(false);
+        if (!cancelled) {
+          setIsLoadingHistory(false);
+          setIsLoadingSession(false);
+        }
       }
     }
 
-    void restoreSession();
+    void bootstrap();
     return () => {
       cancelled = true;
     };
-  }, [rememberChat]);
+  }, [onLogout]);
 
   function startNewChat() {
     clearStoredSessionId();
@@ -164,12 +196,21 @@ export function ChatApp({ user, onLogout }: ChatAppProps) {
     }
   }
 
-  function deleteChat(id: string) {
-    const next = removeChatHistory(id);
-    setHistory(next);
+  async function deleteChat(id: string) {
+    const previous = history;
+    setHistory(removeChatFromList(history, id));
 
     if (sessionIdRef.current === id) {
       startNewChat();
+    }
+
+    try {
+      await deleteChatOnServer(id);
+    } catch (err) {
+      setHistory(previous);
+      setError(
+        err instanceof Error ? err.message : "Could not delete this chat.",
+      );
     }
   }
 
@@ -217,6 +258,11 @@ export function ChatApp({ user, onLogout }: ChatAppProps) {
           }
         }
       }
+
+      // Keep sidebar in sync with the server after creating/continuing a chat
+      void refreshHistory().catch(() => {
+        /* optimistic title already applied */
+      });
     } catch (err) {
       setMessages((current) =>
         current.filter((message) => message.id !== optimisticUser.id),
@@ -249,8 +295,9 @@ export function ChatApp({ user, onLogout }: ChatAppProps) {
         activeSessionId={sessionId}
         onSelect={openChat}
         onNewChat={startNewChat}
-        onDelete={deleteChat}
-        disabled={isSending || isLoadingSession}
+        onDelete={(id) => void deleteChat(id)}
+        disabled={isSending || isLoadingSession || isLoadingHistory}
+        loading={isLoadingHistory}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />

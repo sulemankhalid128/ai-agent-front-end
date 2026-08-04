@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChatApp } from "@/components/chat/ChatApp";
 import { LandingPage } from "@/components/auth/LandingPage";
 import {
@@ -49,15 +49,15 @@ export function AuthGate() {
     };
   }, []);
 
-  function handleAuthenticated(next: AuthUser) {
+  const handleAuthenticated = useCallback((next: AuthUser) => {
     setUser(next);
-  }
+  }, []);
 
-  function handleLogout() {
+  const handleLogout = useCallback(() => {
     clearAuth();
     clearStoredSessionId();
     setUser(null);
-  }
+  }, []);
 
   if (!ready) {
     return (

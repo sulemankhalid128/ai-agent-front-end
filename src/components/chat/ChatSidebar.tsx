@@ -9,6 +9,7 @@ type ChatSidebarProps = {
   onNewChat: () => void;
   onDelete: (sessionId: string) => void;
   disabled?: boolean;
+  loading?: boolean;
   open: boolean;
   onClose: () => void;
 };
@@ -29,6 +30,7 @@ export function ChatSidebar({
   onNewChat,
   onDelete,
   disabled = false,
+  loading = false,
   open,
   onClose,
 }: ChatSidebarProps) {
@@ -69,7 +71,11 @@ export function ChatSidebar({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
-          {items.length === 0 ? (
+          {loading ? (
+            <p className="px-3 py-6 text-center text-sm leading-relaxed text-muted">
+              Loading chats…
+            </p>
+          ) : items.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm leading-relaxed text-muted">
               Your previous chats will appear here.
             </p>
