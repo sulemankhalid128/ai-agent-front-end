@@ -27,12 +27,19 @@ import { ChatSidebar } from "./ChatSidebar";
 import { FeedKnowledgeModal } from "./FeedKnowledgeModal";
 import { MessageBubble } from "./MessageBubble";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import type { AuthUser } from "@/lib/auth";
+import { logout as clearAuthSession } from "@/lib/auth";
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-export function ChatApp() {
+type ChatAppProps = {
+  user: AuthUser;
+  onLogout: () => void;
+};
+
+export function ChatApp({ user, onLogout }: ChatAppProps) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [history, setHistory] = useState<ChatHistoryItem[]>([]);
@@ -214,7 +221,19 @@ export function ChatApp() {
       setMessages((current) =>
         current.filter((message) => message.id !== optimisticUser.id),
       );
-      setError(err instanceof Error ? err.message : "Failed to reach the agent");
+      const message =
+        err instanceof Error ? err.message : "Failed to reach the agent";
+      if (
+        message.toLowerCase().includes("authorization") ||
+        message.toLowerCase().includes("token") ||
+        message.toLowerCase().includes("unauthorized")
+      ) {
+        clearAuthSession();
+        clearStoredSessionId();
+        onLogout();
+        return;
+      }
+      setError(message);
     } finally {
       setIsSending(false);
     }
@@ -238,28 +257,42 @@ export function ChatApp() {
 
       <div className="mx-auto flex min-w-0 flex-1 flex-col px-4 sm:px-6">
         <header className="brand-enter relative shrink-0 pt-3 pb-2 text-center sm:pt-4 sm:pb-3">
-          <div className="mb-1 flex items-center justify-center gap-3">
+          <div className="relative mb-1 flex min-h-8 items-center justify-center">
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="absolute left-0 top-3 rounded-xl bg-surface px-3 py-1.5 text-xs font-medium text-foreground ring-1 ring-border lg:hidden"
+              className="absolute left-0 top-0 rounded-xl bg-surface px-3 py-1.5 text-xs font-medium text-foreground ring-1 ring-border lg:hidden"
             >
               Chats
             </button>
-            <p className="text-[0.65rem] font-semibold tracking-[0.18em] text-accent uppercase">
-              Always on
-            </p>
-            <button
-              type="button"
-              onClick={() => setFeedOpen(true)}
-              className="absolute right-0 top-3 rounded-xl bg-surface px-3 py-1.5 text-xs font-medium text-foreground ring-1 ring-border transition-colors hover:bg-accent-soft"
-            >
-              Feed
-            </button>
+            <div className="absolute right-0 top-0 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setFeedOpen(true)}
+                className="rounded-xl bg-surface px-3 py-1.5 text-xs font-medium text-foreground ring-1 ring-border transition-colors hover:bg-accent-soft"
+              >
+                Feed
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  clearAuthSession();
+                  clearStoredSessionId();
+                  onLogout();
+                }}
+                className="rounded-xl bg-surface px-3 py-1.5 text-xs font-medium text-muted ring-1 ring-border transition-colors hover:bg-accent-soft hover:text-foreground"
+              >
+                Log out
+              </button>
+            </div>
           </div>
           <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-            Personal Agent
+            MSK
           </h1>
+          <p className="mt-1 truncate px-16 text-xs text-muted sm:px-24">
+            {user.name ? `${user.name} · ` : ""}
+            {user.email}
+          </p>
         </header>
 
         <section
@@ -291,7 +324,7 @@ export function ChatApp() {
                 Start a conversation
               </p>
               <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted">
-                Type a message below to begin chatting with your personal agent.
+                Type a message below to begin chatting with MSK.
               </p>
             </div>
           ) : (

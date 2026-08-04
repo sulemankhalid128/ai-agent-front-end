@@ -8,8 +8,9 @@ import type {
   SessionChatTurn,
   SessionMessagesResponse,
 } from "@/types/chat";
+import { API_BASE, readApiError } from "./apiBase";
+import { authHeaders, clearAuth } from "./auth";
 
-const API_BASE = process.env.NEXT_PUBLIC_AGENT_API_BASE ?? "http://localhost:3001";
 const SESSION_KEY = "personal-agent-session-id";
 
 export type AgentSession = {
@@ -37,14 +38,13 @@ export function clearStoredSessionId() {
   window.localStorage.removeItem(SESSION_KEY);
 }
 
-async function readError(response: Response): Promise<string> {
-  try {
-    const data = (await response.json()) as { error?: string };
-    if (data.error) return data.error;
-  } catch {
-    // ignore JSON parse errors
+async function ensureOk(response: Response): Promise<void> {
+  if (response.ok) return;
+  if (response.status === 401) {
+    clearAuth();
+    clearStoredSessionId();
   }
-  return `Request failed (${response.status})`;
+  throw new Error(await readApiError(response));
 }
 
 /** POST / — start or continue a chat turn */
@@ -57,14 +57,11 @@ export async function sendChatMessage(
 
   const response = await fetch(`${API_BASE}/`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(true),
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-
+  await ensureOk(response);
   return (await response.json()) as AgentChatResult;
 }
 
@@ -72,12 +69,10 @@ export async function sendChatMessage(
 export async function fetchSession(sessionId: string): Promise<AgentSession> {
   const response = await fetch(
     `${API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
-    { method: "GET" },
+    { method: "GET", headers: authHeaders(false) },
   );
 
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
+  await ensureOk(response);
 
   const data = (await response.json()) as AgentSession;
   return {
@@ -92,7 +87,10 @@ export async function fetchSessionChat(
   sessionId: string,
 ): Promise<SessionChatTurn[]> {
   const messagesUrl = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages`;
-  const messagesResponse = await fetch(messagesUrl, { method: "GET" });
+  const messagesResponse = await fetch(messagesUrl, {
+    method: "GET",
+    headers: authHeaders(false),
+  });
 
   if (messagesResponse.ok) {
     const data = (await messagesResponse.json()) as SessionMessagesResponse;

@@ -15,8 +15,8 @@ const sans = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "Personal Agent",
-  description: "Chat with your personal AI agent",
+  title: "MSK",
+  description: "MSK — your personal AI agent",
 };
 
 export default function RootLayout({

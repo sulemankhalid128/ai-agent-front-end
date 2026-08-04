@@ -1,4 +1,5 @@
-const API_BASE = process.env.NEXT_PUBLIC_AGENT_API_BASE ?? "http://localhost:3001";
+import { API_BASE, readApiError } from "./apiBase";
+import { authHeaders, clearAuth } from "./auth";
 
 export type FeedKnowledgePayload = {
   text: string;
@@ -14,15 +15,10 @@ export type FeedKnowledgeResult = {
   message?: string;
 };
 
-async function readError(response: Response): Promise<string> {
-  let message = `Request failed (${response.status})`;
-  try {
-    const data = (await response.json()) as { error?: string; message?: string };
-    message = data.error ?? data.message ?? message;
-  } catch {
-    // ignore parse errors
-  }
-  return message;
+async function ensureOk(response: Response): Promise<void> {
+  if (response.ok) return;
+  if (response.status === 401) clearAuth();
+  throw new Error(await readApiError(response));
 }
 
 /** POST /rag/upload — multipart field name: file */
@@ -32,12 +28,11 @@ export async function uploadRagFile(file: File): Promise<unknown> {
 
   const response = await fetch(`${API_BASE}/rag/upload`, {
     method: "POST",
+    headers: authHeaders(false),
     body: formData,
   });
 
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
+  await ensureOk(response);
 
   try {
     return await response.json();
@@ -61,13 +56,11 @@ export async function ingestRagText(options: {
 
   const response = await fetch(`${API_BASE}/rag/ingest-text`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(true),
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
+  await ensureOk(response);
 
   try {
     return await response.json();

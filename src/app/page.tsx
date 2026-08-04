@@ -1,5 +1,5 @@
-import { ChatApp } from "@/components/chat/ChatApp";
+import { AuthGate } from "@/components/auth/AuthGate";
 
 export default function Home() {
-  return <ChatApp />;
+  return <AuthGate />;
 }

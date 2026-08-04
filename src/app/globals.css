@@ -72,6 +72,17 @@ body::before {
   }
 }
 
+@keyframes land-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes message-in {
   from {
     opacity: 0;
@@ -85,6 +96,18 @@ body::before {
 
 .brand-enter {
   animation: brand-in 0.55s ease-out both;
+}
+
+.land-enter {
+  animation: land-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.land-enter-delay {
+  animation: land-rise 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both;
+}
+
+.land-cta {
+  animation: land-rise 0.8s cubic-bezier(0.22, 1, 0.36, 1) 0.22s both;
 }
 
 .message-enter {
