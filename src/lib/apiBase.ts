@@ -1,6 +1,6 @@
 /** Shared backend base URL for the agent API */
 export const API_BASE =
-  process.env.NEXT_PUBLIC_AGENT_API_BASE ?? "http://localhost:3001";
+  process.env.NEXT_PUBLIC_AGENT_API_BASE ?? "http://localhost:4001";
 
 export async function readApiError(response: Response): Promise<string> {
   try {
